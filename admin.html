@@ -1,167 +1,130 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import subprocess
-import json
-import os
-import time
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mudae Admin Panel</title>
+    <style>
+        :root{--bg-color:#23272a;--card-bg:#2c2f33;--primary:#5865F2;--primary-hover:#4752C4;--success:#3ba55d;--danger:#ed4245;--text-main:#ffffff;--text-muted:#b9bbbe;--input-bg:#202225;}
+        *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;}
+        body{background-color:var(--bg-color);color:var(--text-main);display:flex;justify-content:center;align-items:center;min-height:100vh;}
+        .container{width:100%;max-width:600px;padding:20px;}
+        .card{background-color:var(--card-bg);border-radius:12px;padding:30px;box-shadow:0 8px 24px rgba(0,0,0,0.2);margin-bottom:15px;}
+        h2{text-align:center;margin-bottom:20px;color:var(--text-main);}
+        .form-group{margin-bottom:15px;}
+        label{display:block;margin-bottom:8px;color:var(--text-muted);font-size:14px;font-weight:600;}
+        input[type="password"]{width:100%;padding:12px;background-color:var(--input-bg);border:1px solid transparent;border-radius:4px;color:var(--text-main);font-size:16px;outline:none;}
+        input:focus{border-color:var(--primary);}
+        button{width:100%;padding:14px;background-color:var(--primary);color:white;border:none;border-radius:4px;font-size:16px;font-weight:bold;cursor:pointer;margin-top:10px;}
+        button:hover{background-color:var(--primary-hover);}
+        #admin-dashboard{display:none;}
+        .bot-item{background:var(--input-bg);padding:15px;border-radius:8px;margin-bottom:12px;display:flex;align-items:center;gap:15px;}
+        .bot-avatar{width:50px;height:50px;border-radius:50%;object-fit:cover;border:2px solid var(--primary);}
+        .bot-info{flex-grow:1;}
+        .bot-info strong{font-size:16px;color:#fff;}
+        .bot-info p{color:var(--text-muted);font-size:13px;margin-top:3px;}
+        .btn-kill{background-color:var(--danger);width:auto;padding:8px 14px;font-size:13px;margin:0;}
+    </style>
+</head>
+<body>
 
-app = Flask(__name__)
-CORS(app)
+<div class="container">
+    <div id="admin-login-card" class="card">
+        <h2>Admin Login</h2>
+        <div class="form-group">
+            <label>Admin Password</label>
+            <input type="password" id="admin-pass" placeholder="Enter admin password...">
+        </div>
+        <button onclick="loginAdmin()">Access</button>
+        <p id="login-error" style="color:var(--danger); text-align:center; margin-top:10px; display:none;">Incorrect password!</p>
+    </div>
 
-active_processes = {}
-active_configs = {}
-session_info = {}
+    <div id="admin-dashboard" class="card">
+        <h2>Active Sessions Management</h2>
+        <div id="bot-list-container">Loading...</div>
+        <button style="background-color: #4f545c;" onclick="loadAdminBots()">Refresh List</button>
+    </div>
+</div>
 
-ADMIN_PASSWORD = "1412Andaubui"
+<script>
+    const API_URL = "https://washout-marital-parsnip.ngrok-free.dev";
+    let adminPassword = "";
 
-@app.route('/api/start', methods=['POST'])
-def start_bot():
-    data = request.json
-    token = data.get('token')
-    cmd_type = data.get('cmdType')
-    roll_type = data.get('rollType')
-    channel_id = data.get('channelId')
-    username = data.get('username', 'Unknown')
-    avatar_url = data.get('avatarUrl', '')
+    async function loginAdmin() {
+        adminPassword = document.getElementById('admin-pass').value;
+        const errorMsg = document.getElementById('login-error');
+        errorMsg.style.display = "none";
 
-    if not all([token, cmd_type, roll_type, channel_id]):
-        return jsonify({"error": "Data missing"}), 400
+        try {
+            const res = await fetch(`${API_URL}/api/admin/list`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: adminPassword })
+            });
 
-    if token in active_processes:
-        active_processes[token].terminate()
-
-    config_filename = f"config_{abs(hash(token))}.json"
-    active_configs[token] = config_filename
-
-    with open(config_filename, 'w') as f:
-        json.dump({
-            "cmd_type": cmd_type,
-            "roll_type": roll_type,
-            "channel_id": channel_id
-        }, f)
-
-    process = subprocess.Popen([
-        "python", "bot_worker.py", 
-        "--token", token, 
-        "--cmd_type", cmd_type, 
-        "--roll_type", roll_type, 
-        "--channel", channel_id,
-        "--config", config_filename
-    ])
-    
-    active_processes[token] = process
-    masked_token = token[:6] + "..." + token[-4:] if len(token) > 10 else "***"
-    session_info[token] = {
-        "username": username,
-        "avatar_url": avatar_url,
-        "masked_token": masked_token,
-        "roll_type": roll_type,
-        "cmd_type": cmd_type,
-        "channel_id": channel_id,
-        "start_time": time.time()
+            if (res.ok) {
+                document.getElementById('admin-login-card').style.display = "none";
+                document.getElementById('admin-dashboard').style.display = "block";
+                renderBots(await res.json());
+            } else {
+                errorMsg.style.display = "block";
+            }
+        } catch (e) {
+            alert("Cannot connect to VPS!");
+        }
     }
-    return jsonify({"status": "Started"})
 
-@app.route('/api/update', methods=['POST'])
-def update_config():
-    data = request.json
-    token = data.get('token')
-    cmd_type = data.get('cmdType')
-    roll_type = data.get('rollType')
-    channel_id = data.get('channelId')
+    async function loadAdminBots() {
+        try {
+            const res = await fetch(`${API_URL}/api/admin/list`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: adminPassword })
+            });
+            if (res.ok) {
+                renderBots(await res.json());
+            }
+        } catch (e) {}
+    }
 
-    if token in active_configs:
-        config_filename = active_configs[token]
-        with open(config_filename, 'w') as f:
-            json.dump({
-                "cmd_type": cmd_type,
-                "roll_type": roll_type,
-                "channel_id": channel_id
-            }, f)
-        if token in session_info:
-            session_info[token]["roll_type"] = roll_type
-            session_info[token]["cmd_type"] = cmd_type
-            session_info[token]["channel_id"] = channel_id
-        return jsonify({"status": "Updated"})
-    
-    return jsonify({"error": "Not running"}), 404
+    function renderBots(data) {
+        const container = document.getElementById('bot-list-container');
+        if (data.bots.length === 0) {
+            container.innerHTML = "<p style='text-align:center; color:#b9bbbe;'>No active accounts found.</p>";
+            return;
+        }
+        let html = "";
+        data.bots.forEach(b => {
+            html += `<div class="bot-item">
+                <img class="bot-avatar" src="${b.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png'}" alt="Avatar">
+                <div class="bot-info">
+                    <strong>${b.username}</strong>
+                    <p>Token: <code>${b.masked_token}</code></p>
+                    <p>Settings: Command <b>${b.cmd_type.toUpperCase()}</b> | Roll <b>${b.roll_type.toUpperCase()}</b> | Channel: <code>${b.channel_id}</code></p>
+                </div>
+                <button class="btn-kill" onclick="killBot('${b.token}')">Disconnect</button>
+            </div>`;
+        });
+        container.innerHTML = html;
+    }
 
-@app.route('/api/stop', methods=['POST'])
-def stop_bot():
-    data = request.json
-    token = data.get('token')
-
-    if token in active_processes:
-        active_processes[token].terminate()
-        del active_processes[token]
-        if token in active_configs:
-            try:
-                os.remove(active_configs[token])
-            except:
-                pass
-            del active_configs[token]
-        if token in session_info:
-            del session_info[token]
-        return jsonify({"status": "Stopped"})
-    
-    return jsonify({"error": "Not running"}), 404
-
-@app.route('/api/status', methods=['POST'])
-def check_status():
-    data = request.json
-    token = data.get('token')
-    
-    if token in active_processes and active_processes[token].poll() is None:
-        return jsonify({"running": True})
-    return jsonify({"running": False})
-
-@app.route('/api/admin/list', methods=['POST'])
-def admin_list():
-    data = request.json
-    if data.get('password') != ADMIN_PASSWORD:
-        return jsonify({"error": "Unauthorized"}), 403
-
-    running_bots = []
-    for token, proc in list(active_processes.items()):
-        if proc.poll() is None:
-            info = session_info.get(token, {})
-            running_bots.append({
-                "token": token,
-                "username": info.get("username", "Unknown"),
-                "avatar_url": info.get("avatar_url", ""),
-                "masked_token": info.get("masked_token", ""),
-                "roll_type": info.get("roll_type", ""),
-                "cmd_type": info.get("cmd_type", ""),
-                "channel_id": info.get("channel_id", "")
-            })
-        else:
-            del active_processes[token]
-            if token in session_info:
-                del session_info[token]
-
-    return jsonify({"bots": running_bots})
-
-@app.route('/api/admin/kill', methods=['POST'])
-def admin_kill():
-    data = request.json
-    if data.get('password') != ADMIN_PASSWORD:
-        return jsonify({"error": "Unauthorized"}), 403
-
-    token = data.get('token')
-    if token in active_processes:
-        active_processes[token].terminate()
-        del active_processes[token]
-        if token in active_configs:
-            try:
-                os.remove(active_configs[token])
-            except:
-                pass
-            del active_configs[token]
-        if token in session_info:
-            del session_info[token]
-        return jsonify({"status": "Killed"})
-
-    return jsonify({"error": "Not found"}), 404
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    async function killBot(tokenToKill) {
+        if (!confirm("Are you sure you want to disconnect this account?")) return;
+        try {
+            const res = await fetch(`${API_URL}/api/admin/kill`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: adminPassword, token: tokenToKill })
+            });
+            if (res.ok) {
+                loadAdminBots();
+            } else {
+                alert("Failed!");
+            }
+        } catch (e) {
+            alert("Connection error to VPS");
+        }
+    }
+</script>
+</body>
+</html>
