@@ -1,1 +1,167 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import subprocess
+import json
+import os
+import time
 
+app = Flask(__name__)
+CORS(app)
+
+active_processes = {}
+active_configs = {}
+session_info = {}
+
+ADMIN_PASSWORD = "1412Andaubui"
+
+@app.route('/api/start', methods=['POST'])
+def start_bot():
+    data = request.json
+    token = data.get('token')
+    cmd_type = data.get('cmdType')
+    roll_type = data.get('rollType')
+    channel_id = data.get('channelId')
+    username = data.get('username', 'Unknown')
+    avatar_url = data.get('avatarUrl', '')
+
+    if not all([token, cmd_type, roll_type, channel_id]):
+        return jsonify({"error": "Data missing"}), 400
+
+    if token in active_processes:
+        active_processes[token].terminate()
+
+    config_filename = f"config_{abs(hash(token))}.json"
+    active_configs[token] = config_filename
+
+    with open(config_filename, 'w') as f:
+        json.dump({
+            "cmd_type": cmd_type,
+            "roll_type": roll_type,
+            "channel_id": channel_id
+        }, f)
+
+    process = subprocess.Popen([
+        "python", "bot_worker.py", 
+        "--token", token, 
+        "--cmd_type", cmd_type, 
+        "--roll_type", roll_type, 
+        "--channel", channel_id,
+        "--config", config_filename
+    ])
+    
+    active_processes[token] = process
+    masked_token = token[:6] + "..." + token[-4:] if len(token) > 10 else "***"
+    session_info[token] = {
+        "username": username,
+        "avatar_url": avatar_url,
+        "masked_token": masked_token,
+        "roll_type": roll_type,
+        "cmd_type": cmd_type,
+        "channel_id": channel_id,
+        "start_time": time.time()
+    }
+    return jsonify({"status": "Started"})
+
+@app.route('/api/update', methods=['POST'])
+def update_config():
+    data = request.json
+    token = data.get('token')
+    cmd_type = data.get('cmdType')
+    roll_type = data.get('rollType')
+    channel_id = data.get('channelId')
+
+    if token in active_configs:
+        config_filename = active_configs[token]
+        with open(config_filename, 'w') as f:
+            json.dump({
+                "cmd_type": cmd_type,
+                "roll_type": roll_type,
+                "channel_id": channel_id
+            }, f)
+        if token in session_info:
+            session_info[token]["roll_type"] = roll_type
+            session_info[token]["cmd_type"] = cmd_type
+            session_info[token]["channel_id"] = channel_id
+        return jsonify({"status": "Updated"})
+    
+    return jsonify({"error": "Not running"}), 404
+
+@app.route('/api/stop', methods=['POST'])
+def stop_bot():
+    data = request.json
+    token = data.get('token')
+
+    if token in active_processes:
+        active_processes[token].terminate()
+        del active_processes[token]
+        if token in active_configs:
+            try:
+                os.remove(active_configs[token])
+            except:
+                pass
+            del active_configs[token]
+        if token in session_info:
+            del session_info[token]
+        return jsonify({"status": "Stopped"})
+    
+    return jsonify({"error": "Not running"}), 404
+
+@app.route('/api/status', methods=['POST'])
+def check_status():
+    data = request.json
+    token = data.get('token')
+    
+    if token in active_processes and active_processes[token].poll() is None:
+        return jsonify({"running": True})
+    return jsonify({"running": False})
+
+@app.route('/api/admin/list', methods=['POST'])
+def admin_list():
+    data = request.json
+    if data.get('password') != ADMIN_PASSWORD:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    running_bots = []
+    for token, proc in list(active_processes.items()):
+        if proc.poll() is None:
+            info = session_info.get(token, {})
+            running_bots.append({
+                "token": token,
+                "username": info.get("username", "Unknown"),
+                "avatar_url": info.get("avatar_url", ""),
+                "masked_token": info.get("masked_token", ""),
+                "roll_type": info.get("roll_type", ""),
+                "cmd_type": info.get("cmd_type", ""),
+                "channel_id": info.get("channel_id", "")
+            })
+        else:
+            del active_processes[token]
+            if token in session_info:
+                del session_info[token]
+
+    return jsonify({"bots": running_bots})
+
+@app.route('/api/admin/kill', methods=['POST'])
+def admin_kill():
+    data = request.json
+    if data.get('password') != ADMIN_PASSWORD:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    token = data.get('token')
+    if token in active_processes:
+        active_processes[token].terminate()
+        del active_processes[token]
+        if token in active_configs:
+            try:
+                os.remove(active_configs[token])
+            except:
+                pass
+            del active_configs[token]
+        if token in session_info:
+            del session_info[token]
+        return jsonify({"status": "Killed"})
+
+    return jsonify({"error": "Not found"}), 404
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
