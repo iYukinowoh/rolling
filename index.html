@@ -320,12 +320,32 @@
         } catch (e) {}
       }
 
-      function logout() {
-        if (isRunning) toggleBot();
+      async function logout() {
+        const payload = {
+          token: currentUserToken,
+          username: currentUserName,
+          avatarUrl: document.getElementById("user-avatar").src
+        };
+        
+        try {
+          await fetch(`${API_URL}/api/logout`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } catch(e) {}
+
+        isRunning = false;
         currentUserToken = "";
+        currentUserName = "";
         document.getElementById("token-input").value = "";
+        document.getElementById("channel-id").value = "";
         document.getElementById("dashboard-view").style.display = "none";
         document.getElementById("login-view").style.display = "block";
+        
+        const btnToggle = document.getElementById("btn-toggle");
+        btnToggle.classList.remove("running");
+        btnToggle.innerText = "▶ START";
       }
 
       async function toggleBot() {
